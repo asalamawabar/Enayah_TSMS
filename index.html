@@ -993,7 +993,7 @@ function showSubPeriods(subId){
     <div class="search-box"><i class="ti ti-search"></i><input id="opt-q" placeholder="بحث..." oninput="renderOptimization()"></div>
   </div>
   <div class="card" style="padding:0;overflow:hidden"><div class="tbl-wrap">
-    <table class="tbl"><thead><tr><th>الاشتراك</th><th>التكلفة الحالية</th><th>قابل للترشيد</th><th>سبب الترشيد</th><th>الوفر المتوقع</th><th>الوفر المحقق</th><th>ملاحظات</th><th>إجراء</th></tr></thead>
+    <table class="tbl"><thead><tr><th>الاشتراك</th><th>التكلفة السنوية</th><th>نسبة الاستخدام</th><th>قابل للترشيد</th><th>السبب</th><th>وفر متوقع</th><th>وفر محقق</th><th>ملاحظات</th><th>إجراء</th></tr></thead>
     <tbody id="opt-body"></tbody></table>
   </div></div>
 </div>
@@ -2415,30 +2415,63 @@ function rejectCancel(id){
 /* ══════════ OPTIMIZATION ══════════ */
 function renderOptimization(){
   const q=(document.getElementById('opt-q')?.value||'').toLowerCase();
-  let opts=DB.query('optimization');
-  if(q)opts=opts.filter(o=>DB.query('subscriptions').find(s=>s.id===o.subscription_id)?.name?.toLowerCase().includes(q));
   const subs=DB.query('subscriptions');
+  let opts=DB.query('optimization');
+  if(q)opts=opts.filter(o=>subs.find(s=>s.id===o.subscription_id)?.name?.toLowerCase().includes(q));
   const totalExpected=opts.reduce((a,o)=>a+(o.expected_saving||0),0);
   const totalAchieved=opts.reduce((a,o)=>a+(o.achieved_saving||0),0);
   const eligible=opts.filter(o=>o.eligible==='نعم').length;
+  const totalVal=opts.filter(o=>o.eligible==='نعم').reduce((a,o)=>{
+    const s=subs.find(x=>x.id===o.subscription_id);return a+(s?.actual_value||0);
+  },0);
   document.getElementById('opt-kpis').innerHTML=`
-    <div class="kpi" style="--acc:var(--am)"><div class="kpi-lbl">قابلة للترشيد</div><div class="kpi-val">${eligible}</div><div class="kpi-sub">اشتراك</div></div>
-    <div class="kpi" style="--acc:var(--g)"><div class="kpi-lbl">وفر متوقع</div><div class="kpi-val">${fmt(totalExpected)}</div><div class="kpi-sub">ريال سنوياً</div></div>
-    <div class="kpi" style="--acc:#0F6E56"><div class="kpi-lbl">وفر محقق</div><div class="kpi-val">${fmt(totalAchieved)}</div><div class="kpi-sub">ريال</div></div>
-    <div class="kpi" style="--acc:#185FA5"><div class="kpi-lbl">نسبة الإنجاز</div><div class="kpi-val">${totalExpected>0?Math.round(totalAchieved/totalExpected*100):0}%</div><div class="kpi-sub">من الهدف</div></div>`;
+    <div class="kpi" style="--acc:var(--am)"><div class="kpi-lbl"><i class="ti ti-leaf"></i> قابلة للترشيد</div><div class="kpi-val">${eligible}</div><div class="kpi-sub">من أصل ${opts.length} اشتراك</div></div>
+    <div class="kpi" style="--acc:var(--r)"><div class="kpi-lbl"><i class="ti ti-coin"></i> قيمة القابلة للترشيد</div><div class="kpi-val">${fmt(totalVal)}</div><div class="kpi-sub">ريال سنوياً</div></div>
+    <div class="kpi" style="--acc:var(--g)"><div class="kpi-lbl"><i class="ti ti-trending-down"></i> وفر متوقع</div><div class="kpi-val">${fmt(totalExpected)}</div><div class="kpi-sub">ريال سنوياً</div></div>
+    <div class="kpi" style="--acc:#0F6E56"><div class="kpi-lbl"><i class="ti ti-check"></i> وفر محقق</div><div class="kpi-val">${fmt(totalAchieved)}</div><div class="kpi-sub">${totalExpected>0?Math.round(totalAchieved/totalExpected*100):0}% من الهدف</div></div>`;
   document.getElementById('opt-body').innerHTML=opts.map(o=>{
     const s=subs.find(x=>x.id===o.subscription_id);
+    const isEligible=o.eligible==='نعم';
+    const usagePct=s?.users_licensed>0?Math.round(s.users_actual/s.users_licensed*100):null;
     return `<tr>
-      <td style="font-weight:500">${s?.name||'—'}</td>
-      <td>${(s?.actual_value||0).toLocaleString('en-US')} ريال</td>
-      <td><span class="pill ${o.eligible==='نعم'?'pill-a':'pill-g'}">${o.eligible}</span></td>
+      <td>
+        <div style="font-weight:500">${s?.name||'—'}</div>
+        <div style="font-size:10px;color:var(--text2)">${s?.category||''} — ${s?.billing_cycle||''}</div>
+      </td>
+      <td style="font-weight:500">${fmtNum(s?.actual_value||0)} ريال</td>
+      <td style="font-size:11px;color:var(--text2)">
+        ${usagePct!==null?`<div style="display:flex;align-items:center;gap:6px">
+          <div style="flex:1;height:5px;background:var(--bg);border-radius:3px;overflow:hidden;min-width:50px">
+            <div style="width:${Math.min(usagePct,100)}%;height:100%;background:${usagePct<50?'var(--r)':usagePct<75?'var(--am)':'var(--g)'};border-radius:3px"></div>
+          </div>
+          <span>${usagePct}%</span>
+        </div>`:'—'}
+      </td>
+      <td>
+        <button onclick="toggleEligible(${o.id})" style="padding:3px 12px;border-radius:10px;font-size:11px;cursor:pointer;border:none;font-family:'Tajawal',sans-serif;font-weight:500;
+          background:${isEligible?'var(--al)':'var(--gl)'};color:${isEligible?'var(--am)':'var(--g)'}">
+          ${isEligible?'✓ نعم':'— لا'}
+        </button>
+      </td>
       <td style="font-size:11.5px">${o.reason||'—'}</td>
-      <td style="font-weight:500;color:var(--am)">${(o.expected_saving||0).toLocaleString('en-US')}</td>
-      <td style="color:var(--g)">${(o.achieved_saving||0).toLocaleString('en-US')}</td>
-      <td style="font-size:11.5px">${o.notes||'—'}</td>
-      <td><button class="btn btn-sm" onclick="openModal('opt',${o.id})"><i class="ti ti-edit"></i></button></td>
+      <td style="font-weight:500;color:var(--am)">${fmtNum(o.expected_saving||0)}</td>
+      <td style="color:var(--g)">${fmtNum(o.achieved_saving||0)}</td>
+      <td style="font-size:11px;color:var(--text2);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${o.notes||'—'}</td>
+      <td><button class="btn btn-sm" onclick="openModal('opt',${o.id})" title="تعديل تفاصيل الترشيد"><i class="ti ti-edit"></i></button></td>
     </tr>`;
-  }).join('')||noData(8);
+  }).join('')||noData(9);
+}
+
+// ── تبديل حالة الترشيد بنقرة واحدة ──
+function toggleEligible(optId){
+  const o=DB.query('optimization').find(x=>x.id===optId);
+  if(!o)return;
+  const s=DB.query('subscriptions').find(x=>x.id===o.subscription_id);
+  const newEligible=o.eligible==='نعم'?'لا':'نعم';
+  const expectedSaving=newEligible==='نعم'&&s?Math.round(s.actual_value*0.2):o.expected_saving;
+  DB.update('optimization',optId,{eligible:newEligible,expected_saving:expectedSaving});
+  toast(newEligible==='نعم'?`✓ ${s?.name||''} — مُضاف للترشيد`:`${s?.name||''} — أُزيل من الترشيد`);
+  renderOptimization();
 }
 
 /* ══════════ CALENDAR ══════════ */
