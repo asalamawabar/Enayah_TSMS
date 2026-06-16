@@ -3082,8 +3082,13 @@ async function pushToSupabase() {
         'countries','contract_types','cancel_reasons','opt_reasons','attach_types'];
 
       if(appendOnly.includes(table)) {
-        // audit: upsert لتجنب تكرار الأخطاء
-        const cleaned = normalizeRows(rows.map(cleanRow));
+        // audit: deduplicate by id then upsert
+        const seen = new Set();
+        const unique = rows.filter(r => {
+          if(!r.id || seen.has(r.id)) return false;
+          seen.add(r.id); return true;
+        });
+        const cleaned = normalizeRows(unique.map(cleanRow));
         for(let i=0; i<cleaned.length; i+=50) {
           await sbFetch('POST', table, cleaned.slice(i,i+50),
             '', 'resolution=merge-duplicates,return=minimal');
@@ -3221,14 +3226,16 @@ function normalizeRows(rows) {
 
 // ── رفع سجل واحد فوراً (للإضافة والتعديل) ──
 async function upsertRecord(table, row) {
-  if(!_syncOnline || !row) return;
+  if(!_syncOnline || !row || !row.id) return;
   try {
     const cleaned = cleanRow(row);
-    await sbFetch('POST', table, [cleaned]);
+    const appendOnly = ['audit','renewal_history','cancellation_history'];
+    const prefer = appendOnly.includes(table)
+      ? 'resolution=merge-duplicates,return=minimal'
+      : 'resolution=merge-duplicates,return=minimal';
+    await sbFetch('POST', table, [cleaned], '', prefer);
   } catch(e) {
-    console.warn(`Upsert [${table}]:`, e.message);
-    // لا توقف العمل — فقط سجّل
-    schedulePush(); // حاول مرة ثانية لاحقاً
+    console.warn('Upsert ['+table+']:', e.message);
   }
 }
 
