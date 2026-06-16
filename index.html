@@ -2975,22 +2975,19 @@ const SYNC_TABLES = [
 ];
 
 // ── Supabase REST API helper ──
-async function sbFetch(method, table, body=null, params='') {
+async function sbFetch(method, table, body=null, params='', prefer=null) {
   const url = `${SUPABASE_URL}/rest/v1/${table}${params}`;
-  // جداول append-only: لا تحتاج upsert
   const appendOnly = ['audit','renewal_history','cancellation_history'];
-  const prefer = method==='POST'
-    ? (appendOnly.includes(table)
-        ? 'return=representation'                          // insert فقط
-        : 'resolution=merge-duplicates,return=representation') // upsert
-    : 'return=representation';
+  const defaultPrefer = method==='POST'
+    ? (appendOnly.includes(table) ? 'return=minimal' : 'resolution=merge-duplicates,return=minimal')
+    : 'return=minimal';
   const opts = {
     method,
     headers: {
       'apikey': SUPABASE_KEY,
       'Authorization': 'Bearer ' + SUPABASE_KEY,
       'Content-Type': 'application/json',
-      'Prefer': prefer
+      'Prefer': prefer || defaultPrefer
     },
     body: body ? JSON.stringify(body) : undefined
   };
@@ -2999,7 +2996,14 @@ async function sbFetch(method, table, body=null, params='') {
     const err = await res.text();
     throw new Error(`Supabase ${method} ${table}: ${err}`);
   }
-  return res.status === 204 ? null : res.json();
+  if(res.status === 204 || res.headers.get('content-length')==='0') return null;
+  const ct = res.headers.get('content-type')||'';
+  return ct.includes('json') ? res.json() : null;
+}
+
+// حذف كل سجلات جدول معين
+async function sbDeleteAll(table) {
+  await sbFetch('DELETE', table, null, '?id=gte.0');
 }
 
 // ── حالة المزامنة ──
@@ -3047,39 +3051,46 @@ async function pushToSupabase() {
       if(table === 'permissions') {
         const perms = DB.get('permissions');
         if(Object.keys(perms).length) {
+          await sbDeleteAll('permissions_matrix');
           await sbFetch('POST', 'permissions_matrix', [{ id:1, data: JSON.stringify(perms) }]);
           pushed++;
         }
         continue;
       }
+
       let rows = DB.get(table);
       if(!Array.isArray(rows) || !rows.length) continue;
 
-      // للجداول التاريخية: فقط السجلات الجديدة غير المُرسلة
       const appendOnly = ['audit','renewal_history','cancellation_history'];
+      const masterTables = ['roles','departments','vendors','categories','sub_types',
+        'countries','contract_types','cancel_reasons','opt_reasons','attach_types'];
+
       if(appendOnly.includes(table)) {
+        // جداول السجل التاريخي: أضف الجديد فقط
         const sentKey = 'tsms_sb_sent_'+table;
         const sentIds = new Set(JSON.parse(sessionStorage.getItem(sentKey)||'[]'));
         rows = rows.filter(r => r.id && !sentIds.has(r.id));
         if(!rows.length){ pushed++; continue; }
-      }
-
-      // تنظيف وتوحيد السجلات
-      const cleaned = normalizeRows(rows.map(cleanRow));
-
-      // Upsert بدفعات 50 سجل
-      for(let i=0; i<cleaned.length; i+=50) {
-        const batch = cleaned.slice(i, i+50);
-        await sbFetch('POST', table, batch);
-      }
-
-      // حفظ IDs المُرسلة للجداول التاريخية
-      if(['audit','renewal_history','cancellation_history'].includes(table)) {
-        const sentKey = 'tsms_sb_sent_'+table;
-        const prevSent = JSON.parse(sessionStorage.getItem(sentKey)||'[]');
-        const newSent = [...new Set([...prevSent, ...rows.map(r=>r.id)])];
-        // احتفظ بآخر 500 فقط
-        sessionStorage.setItem(sentKey, JSON.stringify(newSent.slice(-500)));
+        const cleaned = normalizeRows(rows.map(cleanRow));
+        for(let i=0; i<cleaned.length; i+=50) {
+          await sbFetch('POST', table, cleaned.slice(i,i+50));
+        }
+        const sentKey2 = 'tsms_sb_sent_'+table;
+        const prev = JSON.parse(sessionStorage.getItem(sentKey2)||'[]');
+        sessionStorage.setItem(sentKey2, JSON.stringify([...new Set([...prev,...rows.map(r=>r.id)])].slice(-500)));
+      } else if(masterTables.includes(table)) {
+        // جداول البيانات المرجعية: احذف ثم أدرج
+        await sbDeleteAll(table);
+        const cleaned = normalizeRows(rows.map(cleanRow));
+        for(let i=0; i<cleaned.length; i+=50) {
+          await sbFetch('POST', table, cleaned.slice(i,i+50));
+        }
+      } else {
+        // جداول البيانات الرئيسية: upsert
+        const cleaned = normalizeRows(rows.map(cleanRow));
+        for(let i=0; i<cleaned.length; i+=50) {
+          await sbFetch('POST', table, cleaned.slice(i,i+50));
+        }
       }
       pushed++;
     } catch(e) {
