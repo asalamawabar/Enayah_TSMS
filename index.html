@@ -3003,7 +3003,21 @@ async function sbFetch(method, table, body=null, params='', prefer=null) {
 
 // حذف كل سجلات جدول معين
 async function sbDeleteAll(table) {
-  await sbFetch('DELETE', table, null, '?id=gte.0');
+  // استخدم neq للحذف الكامل (يحذف كل السجلات)
+  try {
+    await sbFetch('DELETE', table, null, '?id=neq.0', 'return=minimal');
+  } catch(e) {
+    // بديل: DELETE بدون فلتر
+    const url = `${SUPABASE_URL}/rest/v1/${table}`;
+    await fetch(url, {
+      method: 'DELETE',
+      headers: {
+        'apikey': SUPABASE_KEY,
+        'Authorization': 'Bearer ' + SUPABASE_KEY,
+        'Prefer': 'return=minimal'
+      }
+    });
+  }
 }
 
 // ── حالة المزامنة ──
@@ -3079,11 +3093,11 @@ async function pushToSupabase() {
         const prev = JSON.parse(sessionStorage.getItem(sentKey2)||'[]');
         sessionStorage.setItem(sentKey2, JSON.stringify([...new Set([...prev,...rows.map(r=>r.id)])].slice(-500)));
       } else if(masterTables.includes(table)) {
-        // جداول البيانات المرجعية: احذف ثم أدرج
-        await sbDeleteAll(table);
+        // جداول البيانات المرجعية: upsert مع تحديث
         const cleaned = normalizeRows(rows.map(cleanRow));
         for(let i=0; i<cleaned.length; i+=50) {
-          await sbFetch('POST', table, cleaned.slice(i,i+50));
+          await sbFetch('POST', table, cleaned.slice(i,i+50),
+            '', 'resolution=merge-duplicates,return=minimal');
         }
       } else {
         // جداول البيانات الرئيسية: upsert
@@ -3185,16 +3199,28 @@ function normalizeRows(rows) {
     const normalized = {};
     allKeys.forEach(k => {
       let val = r[k] !== undefined ? r[k] : null;
-      // تأكد أن id و foreign keys أرقام صحيحة وليست نصوص فارغة
-      if((k === 'id' || k.endsWith('_id')) && val !== null) {
-        const parsed = parseInt(val);
-        val = isNaN(parsed) ? null : parsed;
+      // تحويل id و FK إلى أرقام
+      if(k === 'id' || k.endsWith('_id')) {
+        if(val === null || val === '' || val === undefined) {
+          if(k === 'id') return; // تجاهل id الفارغ كلياً
+          val = null;
+        } else {
+          const parsed = parseInt(val);
+          val = isNaN(parsed) ? null : parsed;
+        }
       }
-      if(val !== null) normalized[k] = val; // لا ترسل null للـ id
-      else if(k !== 'id') normalized[k] = null;
+      // تحويل boolean
+      if(typeof val === 'boolean') val = val;
+      // تحويل أرقام
+      if(k === 'deleted' && val !== null) val = Boolean(val);
+      normalized[k] = val;
     });
+    // تأكد أن id موجود وصحيح
+    if(r.id !== undefined && r.id !== '' && r.id !== null) {
+      normalized.id = parseInt(r.id);
+    }
     return normalized;
-  });
+  }).filter(r => r.id != null && !isNaN(r.id)); // فلتر السجلات بدون id صحيح
 }
 
 // ── رفع سجل واحد فوراً (للإضافة والتعديل) ──
