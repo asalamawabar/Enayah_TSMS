@@ -3055,11 +3055,12 @@ async function pushToSupabase() {
       let rows = DB.get(table);
       if(!Array.isArray(rows) || !rows.length) continue;
 
-      // للجداول التاريخية: فقط السجلات الجديدة
+      // للجداول التاريخية: فقط السجلات الجديدة غير المُرسلة
       const appendOnly = ['audit','renewal_history','cancellation_history'];
       if(appendOnly.includes(table)) {
-        const lastId = parseInt(localStorage.getItem('tsms_sb_last_'+table) || '0');
-        rows = rows.filter(r => (r.id||0) > lastId);
+        const sentKey = 'tsms_sb_sent_'+table;
+        const sentIds = new Set(JSON.parse(sessionStorage.getItem(sentKey)||'[]'));
+        rows = rows.filter(r => r.id && !sentIds.has(r.id));
         if(!rows.length){ pushed++; continue; }
       }
 
@@ -3072,10 +3073,13 @@ async function pushToSupabase() {
         await sbFetch('POST', table, batch);
       }
 
-      // حفظ آخر ID مُزامن للجداول التاريخية
+      // حفظ IDs المُرسلة للجداول التاريخية
       if(['audit','renewal_history','cancellation_history'].includes(table)) {
-        const maxId = Math.max(...rows.map(r=>r.id||0));
-        localStorage.setItem('tsms_sb_last_'+table, maxId);
+        const sentKey = 'tsms_sb_sent_'+table;
+        const prevSent = JSON.parse(sessionStorage.getItem(sentKey)||'[]');
+        const newSent = [...new Set([...prevSent, ...rows.map(r=>r.id)])];
+        // احتفظ بآخر 500 فقط
+        sessionStorage.setItem(sentKey, JSON.stringify(newSent.slice(-500)));
       }
       pushed++;
     } catch(e) {
@@ -3152,21 +3156,32 @@ function cleanRow(row) {
     const v = row[k];
     if(typeof v === 'function') return;
     if(v === undefined) return;
+    // تحويل id الفارغ لـ null
+    if(k === 'id' && (v === '' || v === null)) return;
     cleaned[k] = v;
   });
+  // تأكد أن id رقم صحيح
+  if(cleaned.id !== undefined) cleaned.id = parseInt(cleaned.id) || cleaned.id;
   return cleaned;
 }
 
 // ── توحيد مفاتيح مجموعة سجلات ──
 function normalizeRows(rows) {
   if(!rows.length) return rows;
-  // جمع كل المفاتيح الممكنة
   const allKeys = new Set();
   rows.forEach(r => Object.keys(r).forEach(k => allKeys.add(k)));
-  // تأكد أن كل سجل يحتوي على نفس المفاتيح
   return rows.map(r => {
     const normalized = {};
-    allKeys.forEach(k => { normalized[k] = r[k] !== undefined ? r[k] : null; });
+    allKeys.forEach(k => {
+      let val = r[k] !== undefined ? r[k] : null;
+      // تأكد أن id و foreign keys أرقام صحيحة وليست نصوص فارغة
+      if((k === 'id' || k.endsWith('_id')) && val !== null) {
+        const parsed = parseInt(val);
+        val = isNaN(parsed) ? null : parsed;
+      }
+      if(val !== null) normalized[k] = val; // لا ترسل null للـ id
+      else if(k !== 'id') normalized[k] = null;
+    });
     return normalized;
   });
 }
