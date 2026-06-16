@@ -2462,6 +2462,17 @@ function renderOptimization(){
   }).join('')||noData(9);
 }
 
+// ── حساب الوفر المقترح عند اختيار اشتراك ──
+function optCalcSaving(subId){
+  const s=DB.query('subscriptions').find(x=>x.id===parseInt(subId));
+  if(!s)return;
+  const suggested=Math.round(s.actual_value*0.2);
+  const savingEl=document.getElementById('f-expected_saving');
+  const hintEl=document.getElementById('opt-saving-hint');
+  if(savingEl)savingEl.value=suggested;
+  if(hintEl)hintEl.textContent='مقترح: '+fmtNum(suggested)+' ريال (20% من '+fmtNum(s.actual_value)+' ريال)';
+}
+
 // ── تبديل حالة الترشيد بنقرة واحدة ──
 function toggleEligible(optId){
   const o=DB.query('optimization').find(x=>x.id===optId);
@@ -2664,9 +2675,30 @@ window.submitModal=function(){
   // Handle optimization
   if(mType==='opt'){
     const fv=id=>{const el=document.getElementById(id);return el?el.value.trim():'';}
-    const data={eligible:fv('f-eligible'),reason:fv('f-reason'),expected_saving:parseFloat(fv('f-expected_saving'))||0,achieved_saving:parseFloat(fv('f-achieved_saving'))||0,notes:fv('f-notes')};
-    if(mId)DB.update('optimization',mId,data);
-    toast('تم الحفظ');closeModal();renderOptimization();return;
+    const data={eligible:fv('f-eligible'),reason:fv('f-reason'),
+      expected_saving:parseFloat(fv('f-expected_saving'))||0,
+      achieved_saving:parseFloat(fv('f-achieved_saving'))||0,
+      notes:fv('f-notes')};
+    if(mId){
+      // تعديل موجود
+      DB.update('optimization',mId,data);
+      toast('تم تحديث بيانات الترشيد');
+    } else {
+      // إضافة جديدة
+      const subId=parseInt(fv('f-subscription_id'));
+      if(!subId){toast('يجب اختيار اشتراك','err');return;}
+      // تحقق إذا يوجد سجل مسبق لهذا الاشتراك
+      const existing=DB.query('optimization').find(o=>o.subscription_id===subId);
+      if(existing){
+        // حدّث الموجود بدل إضافة جديد
+        DB.update('optimization',existing.id,data);
+        toast('تم تحديث سجل الترشيد الموجود');
+      } else {
+        DB.insert('optimization',{...data,subscription_id:subId});
+        toast('تمت إضافة فرصة الترشيد');
+      }
+    }
+    closeModal();renderOptimization();return;
   }
   // Fall through to original
   _origSubmit();
@@ -2740,14 +2772,49 @@ window.openModal=function(type,editId=null){
               <option ${v('status')==='مرفوض'?'selected':''}>مرفوض</option></select></div>
       <div class="field span2"><div class="flbl">ملاحظات</div><textarea class="ftxt" id="f-notes">${v('notes')}</textarea></div>
     </div>`,
-    opt:`<div class="form-grid2">
-      <div class="field"><div class="flbl">قابل للترشيد</div><select class="fsel" id="f-eligible"><option ${v('eligible')==='نعم'?'selected':''}>نعم</option><option ${v('eligible')==='لا'?'selected':''}>لا</option></select></div>
-      <div class="field"><div class="flbl">سبب الترشيد</div><select class="fsel" id="f-reason"><option value="">-- اختر --</option>${selOpts(DB.query('opt_reasons'),'name','name',v('reason'))}</select></div>
-      <div class="field"><div class="flbl">الوفر المتوقع (ريال)</div><input class="finput" type="number" id="f-expected_saving" value="${v('expected_saving',0)}"></div>
-      <div class="field"><div class="flbl">الوفر المحقق (ريال)</div><input class="finput" type="number" id="f-achieved_saving" value="${v('achieved_saving',0)}"></div>
-      <div class="field span2"><div class="flbl">ملاحظات</div><textarea class="ftxt" id="f-notes">${v('notes')}</textarea></div>
-    </div>`
-  };
+    opt:(()=>{
+      const subSel = editId
+        ? `<div style="background:var(--gp);border:1px solid rgba(27,107,90,.2);border-radius:8px;padding:10px 14px;margin-bottom:12px;display:flex;align-items:center;gap:8px;font-size:12.5px">
+            <i class="ti ti-certificate" style="color:var(--g)"></i>
+            <strong>${DB.query('subscriptions').find(s=>s.id===ex?.subscription_id)?.name||'—'}</strong>
+            <span style="color:var(--text2);font-size:11px">${DB.query('subscriptions').find(s=>s.id===ex?.subscription_id)?.category||''}</span>
+          </div>`
+        : `<div class="field span2" style="margin-bottom:12px">
+            <div class="flbl">الاشتراك <span class="req">*</span></div>
+            <select class="fsel" id="f-subscription_id" onchange="optCalcSaving(this.value)">
+              <option value="">-- اختر الاشتراك --</option>
+              ${DB.query('subscriptions').filter(s=>s.status!=='ملغي').map(s=>{
+                const ex2=DB.query('optimization').find(o=>o.subscription_id===s.id);
+                return '<option value="'+s.id+'"'+(ex2?' style="color:var(--am);"':'')+'>'+s.name+(ex2?' ★':'')+'</option>';
+              }).join('')}
+            </select>
+            <div class="fhint">★ الاشتراكات المُعلَّمة موجودة مسبقاً في قائمة الترشيد وسيتم تحديثها</div>
+          </div>`;
+      return subSel + `<div class="form-grid2">
+        <div class="field"><div class="flbl">قابل للترشيد</div>
+          <select class="fsel" id="f-eligible">
+            <option ${v('eligible','نعم')==='نعم'?'selected':''}>نعم</option>
+            <option ${v('eligible')==='لا'?'selected':''}>لا</option>
+          </select>
+        </div>
+        <div class="field"><div class="flbl">سبب الترشيد</div>
+          <select class="fsel" id="f-reason">
+            <option value="">-- اختر --</option>
+            ${selOpts(DB.query('opt_reasons'),'name','name',v('reason'))}
+          </select>
+        </div>
+        <div class="field"><div class="flbl">الوفر المتوقع (ريال)</div>
+          <input class="finput" type="number" id="f-expected_saving" value="${v('expected_saving',0)}">
+          <div class="fhint" id="opt-saving-hint">${editId?'مقترح: '+fmtNum(Math.round((DB.query('subscriptions').find(s=>s.id===ex?.subscription_id)?.actual_value||0)*0.2))+' ريال':'اختر اشتراكاً لحساب الوفر'}</div>
+        </div>
+        <div class="field"><div class="flbl">الوفر المحقق (ريال)</div>
+          <input class="finput" type="number" id="f-achieved_saving" value="${v('achieved_saving',0)}">
+        </div>
+        <div class="field span2"><div class="flbl">ملاحظات</div>
+          <textarea class="ftxt" id="f-notes">${v('notes')}</textarea>
+        </div>
+      </div>`;
+    })()};
   document.getElementById('modal-body').innerHTML=bodies[type]||'';
   document.getElementById('modal-overlay').classList.add('open');
   // Render attachment zones if editing
