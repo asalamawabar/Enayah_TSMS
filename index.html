@@ -3082,18 +3082,12 @@ async function pushToSupabase() {
         'countries','contract_types','cancel_reasons','opt_reasons','attach_types'];
 
       if(appendOnly.includes(table)) {
-        // جداول السجل التاريخي: أضف الجديد فقط
-        const sentKey = 'tsms_sb_sent_'+table;
-        const sentIds = new Set(JSON.parse(sessionStorage.getItem(sentKey)||'[]'));
-        rows = rows.filter(r => r.id && !sentIds.has(r.id));
-        if(!rows.length){ pushed++; continue; }
+        // audit: upsert لتجنب تكرار الأخطاء
         const cleaned = normalizeRows(rows.map(cleanRow));
         for(let i=0; i<cleaned.length; i+=50) {
-          await sbFetch('POST', table, cleaned.slice(i,i+50));
+          await sbFetch('POST', table, cleaned.slice(i,i+50),
+            '', 'resolution=merge-duplicates,return=minimal');
         }
-        const sentKey2 = 'tsms_sb_sent_'+table;
-        const prev = JSON.parse(sessionStorage.getItem(sentKey2)||'[]');
-        sessionStorage.setItem(sentKey2, JSON.stringify([...new Set([...prev,...rows.map(r=>r.id)])].slice(-500)));
       } else if(masterTables.includes(table)) {
         // جداول البيانات المرجعية: upsert مع تحديث
         const cleaned = normalizeRows(rows.map(cleanRow));
