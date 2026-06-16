@@ -2966,12 +2966,14 @@ const SUPABASE_URL = 'https://vsptnipfrzicpnkzqxoj.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZzcHRuaXBmcnppY3Bua3pxeG9qIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE1ODQwODQsImV4cCI6MjA5NzE2MDA4NH0.puP9UebAJgT8vgnCv8fQTvFIQ15ysahu__4ZOgS_xw0';
 
 // الجداول التي ستُزامن مع Supabase
+// الجداول المرجعية تُدار مباشرة في Supabase عبر SQL
+const MASTER_TABLES_SB = ['categories','sub_types','countries','contract_types',
+  'cancel_reasons','opt_reasons','attach_types','roles','departments'];
+
 const SYNC_TABLES = [
-  'subscriptions','subscription_periods','vendors','departments',
+  'subscriptions','subscription_periods','vendors',
   'users','contracts','renewals','cancellations','optimization',
-  'invoices','attachments','audit','renewal_history','cancellation_history',
-  'categories','sub_types','countries','contract_types',
-  'cancel_reasons','opt_reasons','attach_types','roles','permissions'
+  'invoices','attachments','audit','renewal_history','cancellation_history','permissions'
 ];
 
 // ── Supabase REST API helper ──
