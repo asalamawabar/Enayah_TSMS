@@ -710,6 +710,12 @@ function showSubPeriods(subId){
       <div id="exp-list"></div>
     </div>
   </div>
+  <div class="grid2">
+    <div class="card">
+      <div class="ch"><span class="ct">إجمالي التكلفة حسب الإدارة المستفيدة</span><span class="ca" onclick="nav('depts')">الكل</span></div>
+      <div id="dept-spend-bars"></div>
+    </div>
+  </div>
 </div>
 
 <!-- ── SUBSCRIPTIONS ── -->
@@ -717,6 +723,7 @@ function showSubPeriods(subId){
   <div class="toolbar">
     <div class="search-box"><i class="ti ti-search"></i><input id="sub-q" placeholder="بحث في الاشتراكات..." oninput="renderSubs()"></div>
     <select class="filt" id="sub-cat" onchange="renderSubs()"><option value="">كل التصنيفات</option></select>
+    <select class="filt" id="sub-dept" onchange="renderSubs()"><option value="">كل الإدارات</option></select>
     <select class="filt" id="sub-status" onchange="renderSubs()">
       <option value="">كل الحالات</option><option>نشط</option><option>ينتهي قريباً</option><option>منتهي</option><option>موقوف</option>
     </select>
@@ -1521,6 +1528,20 @@ function renderDash(){
     return `<div class="bar-row"><div class="bar-lbl">${v?.name||'مجهول'}</div><div class="bar-wrap"><div class="bar-fill" style="width:${Math.round(sp/maxSpend*100)}%;background:${vColors[i]}"></div></div><div class="bar-val">${fmt(sp)}</div></div>`;
   }).join('');
 
+  // Department spending breakdown
+  const depts=DB.query('departments');
+  const deptSpend={};
+  subs.forEach(s=>{if(s.dept_id)deptSpend[s.dept_id]=(deptSpend[s.dept_id]||0)+s.actual_value});
+  const dColors=['#1B6B5A','#185FA5','#BA7517','#A63228','#534AB7','#0F6E56','#D85A30','#6B7280'];
+  const maxDeptSpend=Math.max(...Object.values(deptSpend),1);
+  const deptEntries=Object.entries(deptSpend).sort((a,b)=>b[1]-a[1]);
+  const totalDeptSpend=Object.values(deptSpend).reduce((a,v)=>a+v,0);
+  document.getElementById('dept-spend-bars').innerHTML=(deptEntries.length?deptEntries.map(([did,sp],i)=>{
+    const d=depts.find(x=>x.id===parseInt(did));
+    const pct=totalDeptSpend>0?Math.round(sp/totalDeptSpend*100):0;
+    return `<div class="bar-row"><div class="bar-lbl">${d?.name||'بدون إدارة'}</div><div class="bar-wrap"><div class="bar-fill" style="width:${Math.round(sp/maxDeptSpend*100)}%;background:${dColors[i%dColors.length]}"></div></div><div class="bar-val">${fmt(sp)} <span style="color:var(--text2);font-size:10px">(${pct}%)</span></div></div>`;
+  }).join(''):'<div style="text-align:center;color:var(--text2);font-size:12px;padding:14px 0">لا توجد بيانات إنفاق بعد</div>');
+
   // Expiry list
   const expList=subs.filter(s=>['ينتهي قريباً','منتهي'].includes(s.status)).slice(0,6);
   const expiringValue=subs.filter(s=>s.status==='ينتهي قريباً').reduce((a,s)=>a+s.actual_value,0);
@@ -1553,12 +1574,22 @@ function renderSubs(){
       const o=document.createElement('option');o.value=c.name;o.textContent=c.name;catSel.appendChild(o);
     });
   }
+  // Populate department filter from master data
+  const deptSel=document.getElementById('sub-dept');
+  if(deptSel){
+    const currentDeptVal=deptSel.value;
+    const deptList=DB.query('departments');
+    deptSel.innerHTML='<option value="">كل الإدارات</option>'+deptList.map(d=>`<option value="${d.id}">${d.name}</option>`).join('');
+    deptSel.value=currentDeptVal;
+  }
   const q=(document.getElementById('sub-q')?.value||'').toLowerCase();
   const cf=document.getElementById('sub-cat')?.value||'';
+  const df=document.getElementById('sub-dept')?.value||'';
   const sf=document.getElementById('sub-status')?.value||'';
   let subs=DB.query('subscriptions');
   if(q)subs=subs.filter(s=>s.name.toLowerCase().includes(q)||s.category.includes(q)||s.status.includes(q));
   if(cf)subs=subs.filter(s=>s.category===cf);
+  if(df)subs=subs.filter(s=>s.dept_id===parseInt(df));
   if(sf)subs=subs.filter(s=>s.status===sf);
   const vendors=DB.query('vendors'),depts=DB.query('departments');
   const total=subs.reduce((a,s)=>a+s.actual_value,0);
@@ -2966,14 +2997,21 @@ const SUPABASE_URL = 'https://vsptnipfrzicpnkzqxoj.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZzcHRuaXBmcnppY3Bua3pxeG9qIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE1ODQwODQsImV4cCI6MjA5NzE2MDA4NH0.puP9UebAJgT8vgnCv8fQTvFIQ15ysahu__4ZOgS_xw0';
 
 // الجداول التي ستُزامن مع Supabase
-// الجداول المرجعية تُدار مباشرة في Supabase عبر SQL
+// الجداول المرجعية الثابتة فعلاً (لا تتغير من المستخدم) — تُدار عبر SQL مباشرة
 const MASTER_TABLES_SB = ['categories','sub_types','countries','contract_types',
-  'cancel_reasons','opt_reasons','attach_types','roles','departments'];
+  'cancel_reasons','opt_reasons','attach_types','roles'];
 
-const SYNC_TABLES = [
-  'subscriptions','subscription_periods','vendors',
+// الجداول الرئيسية — تُزامن تلقائياً عند كل تغيير (تشمل الإدارات لأنها قابلة للتعديل)
+const AUTO_SYNC_TABLES = [
+  'subscriptions','subscription_periods','vendors','departments',
   'users','contracts','renewals','cancellations','optimization',
-  'invoices','attachments','audit','renewal_history','cancellation_history','permissions'
+  'invoices','attachments','permissions'
+];
+
+// كل الجداول — تُزامن عند الضغط على رفع يدوياً
+const SYNC_TABLES = [
+  ...AUTO_SYNC_TABLES,
+  'audit','renewal_history','cancellation_history'
 ];
 
 // ── Supabase REST API helper ──
@@ -3165,14 +3203,48 @@ async function pullFromSupabase() {
   if(renders[curPanel]) renders[curPanel]();
 }
 
-// ── مزامنة تلقائية عند كل تغيير ──
+// ── مزامنة تلقائية عند كل تغيير (بدون audit) ──
 let _syncTimeout = null;
 function schedulePush() {
   clearTimeout(_syncTimeout);
   _syncTimeout = setTimeout(async () => {
-    if(_syncOnline) await pushToSupabase();
+    if(_syncOnline) await autoSync();
     else markUnsaved();
   }, 2000); // انتظر 2 ثانية بعد آخر تغيير
+}
+
+// مزامنة تلقائية — البيانات الرئيسية فقط بدون audit
+async function autoSync() {
+  let ok = 0; const errs = [];
+  const appendOnly = ['audit','renewal_history','cancellation_history'];
+  const masterTables = MASTER_TABLES_SB;
+  for(const table of AUTO_SYNC_TABLES) {
+    try {
+      if(table === 'permissions') {
+        const perms = DB.get('permissions');
+        if(Object.keys(perms).length) {
+          await sbFetch('POST','permissions_matrix',[{id:1,data:JSON.stringify(perms)}],'','resolution=merge-duplicates,return=minimal');
+          ok++;
+        }
+        continue;
+      }
+      const rows = DB.get(table);
+      if(!Array.isArray(rows)||!rows.length){ok++;continue;}
+      const cleaned = normalizeRows(rows.map(cleanRow));
+      for(let i=0;i<cleaned.length;i+=50) {
+        await sbFetch('POST',table,cleaned.slice(i,i+50),'','resolution=merge-duplicates,return=minimal');
+      }
+      ok++;
+    } catch(e) { errs.push(table+': '+e.message); }
+  }
+  _unsaved = false;
+  _lastSync = ts();
+  localStorage.setItem('tsms_last_supabase_sync',_lastSync);
+  if(errs.length) {
+    updateSyncUI('error','⚠ '+ok+' جدول، '+errs.length+' خطأ');
+  } else {
+    updateSyncUI('synced','☁ مزامنة تلقائية ✓ '+_lastSync);
+  }
 }
 
 // ── تنظيف سجل قبل الإرسال لـ Supabase ──
@@ -3226,16 +3298,21 @@ function normalizeRows(rows) {
 
 // ── رفع سجل واحد فوراً (للإضافة والتعديل) ──
 async function upsertRecord(table, row) {
-  if(!_syncOnline || !row || !row.id) return;
+  if(!_syncOnline || !row || !row.id) {
+    if(!_syncOnline) updateSyncUI('offline', '◌ غير متصل — سيُرفع لاحقاً');
+    return false;
+  }
   try {
     const cleaned = cleanRow(row);
-    const appendOnly = ['audit','renewal_history','cancellation_history'];
-    const prefer = appendOnly.includes(table)
-      ? 'resolution=merge-duplicates,return=minimal'
-      : 'resolution=merge-duplicates,return=minimal';
-    await sbFetch('POST', table, [cleaned], '', prefer);
+    await sbFetch('POST', table, [cleaned], '', 'resolution=merge-duplicates,return=minimal');
+    _lastSync = ts();
+    localStorage.setItem('tsms_last_supabase_sync', _lastSync);
+    updateSyncUI('synced', `☁ تمت المزامنة تلقائياً ✓ ${_lastSync}`);
+    return true;
   } catch(e) {
     console.warn('Upsert ['+table+']:', e.message);
+    updateSyncUI('error', '⚠ فشلت المزامنة التلقائية — اضغط رفع');
+    return false;
   }
 }
 
@@ -3246,26 +3323,31 @@ const _sbOrigDelete = DB.softDelete.bind(DB);
 
 DB.insert = function(t, row) {
   const r = _sbOrigInsert(t, row);
-  if(SYNC_TABLES.includes(t) && t !== 'permissions') {
-    upsertRecord(t, r); // رفع فوري
+  // رفع فوري للجداول الرئيسية فقط (ليس audit)
+  if(AUTO_SYNC_TABLES.includes(t) && t !== 'permissions') {
+    upsertRecord(t, r).then(success => { if(!success) schedulePush(); });
+  } else {
+    schedulePush(); // جدولة للباقي
   }
   markUnsaved();
   return r;
 };
 DB.update = function(t, id, ch) {
   const r = _sbOrigUpdate(t, id, ch);
-  if(SYNC_TABLES.includes(t) && t !== 'permissions') {
+  if(AUTO_SYNC_TABLES.includes(t) && t !== 'permissions') {
     const updated = DB.query(t).find(x => x.id === id) || r;
-    upsertRecord(t, updated); // رفع فوري
+    upsertRecord(t, updated).then(success => { if(!success) schedulePush(); });
+  } else {
+    schedulePush();
   }
   markUnsaved();
   return r;
 };
 DB.softDelete = function(t, id) {
   _sbOrigDelete(t, id);
-  if(SYNC_TABLES.includes(t)) {
+  if(AUTO_SYNC_TABLES.includes(t)) {
     const row = DB.get(t).find(x => x.id === id);
-    if(row) upsertRecord(t, row);
+    if(row) upsertRecord(t, row).then(success => { if(!success) schedulePush(); });
   }
   markUnsaved();
 };
@@ -3277,7 +3359,7 @@ function addSyncButtons() {
   bar.innerHTML = `
     <i class="ti ti-cloud" style="color:var(--g);font-size:14px"></i>
     <span id="db-save-indicator" style="font-size:11px;color:var(--am)">جارٍ الاتصال...</span>
-    <button class="btn btn-sm" onclick="pushToSupabase()" title="رفع بياناتك إلى Supabase"
+    <button class="btn btn-sm" onclick="pushToSupabase()" title="رفع كامل شامل سجل العمليات"
       style="background:var(--g);color:#fff;border-color:var(--g);font-size:11px;padding:3px 9px">
       <i class="ti ti-cloud-upload"></i> رفع
     </button>
@@ -3357,3 +3439,4 @@ try{
 </script>
 </body>
 </html>
+
